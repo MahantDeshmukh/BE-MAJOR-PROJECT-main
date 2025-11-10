@@ -1,23 +1,22 @@
 """
 Google News scraper for cybersecurity news
-Scrapes news from Google News search results for cybersecurity topics
+Improved version using RSS feeds for reliable scraping
 """
-import requests
+import feedparser
 import logging
 import time
 import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse, quote
+from urllib.parse import quote_plus, urlparse
 import random
-import json
 
 from config import (
     USER_AGENTS, REQUEST_TIMEOUT, REQUEST_DELAY, MAX_RETRIES,
     INDIA_CYBER_KEYWORDS, SECURITY_CONFIG
 )
 from database.db_setup import db_manager
+from database.models import Source
 
 logger = logging.getLogger(__name__)
 
@@ -29,63 +28,26 @@ class GoogleNewsScraperError(Exception):
 
 class GoogleNewsScraper:
     """
-    Scraper for Google News cybersecurity articles
+    Improved scraper for Google News cybersecurity articles using RSS feeds
     """
 
     def __init__(self):
         """Initialize the Google News scraper"""
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': random.choice(USER_AGENTS),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-        })
         self.base_url = "https://news.google.com"
-
-    def _make_request(self, url: str, retries: int = MAX_RETRIES) -> Optional[requests.Response]:
-        """
-        Make HTTP request with retry logic
-        """
-        for attempt in range(retries):
-            try:
-                response = self.session.get(url, timeout=REQUEST_TIMEOUT)
-                response.raise_for_status()
-                return response
-            except requests.RequestException as e:
-                logger.warning(f"Google News request failed (attempt {attempt + 1}/{retries}): {e}")
-                if attempt < retries - 1:
-                    time.sleep(REQUEST_DELAY * (attempt + 1))
-
-        logger.error(f"Failed to fetch {url} after {retries} attempts")
-        return None
-
-    def _extract_text_content(self, html_content: str) -> str:
-        """Extract clean text content from HTML"""
+        
+    def _parse_rss_date(self, date_str: str) -> Optional[datetime]:
+        """Parse date string from RSS feed format"""
         try:
-            soup = BeautifulSoup(html_content, 'html.parser')
-            for script in soup(["script", "style", "nav", "footer", "aside"]):
-                script.decompose()
-            text = soup.get_text()
-            lines = (line.strip() for line in text.splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = ' '.join(chunk for chunk in chunks if chunk)
-            return text[:5000]
-        except Exception as e:
-            logger.error(f"Failed to extract text content: {e}")
-            return ""
-
-    def _parse_google_news_date(self, date_str: str) -> Optional[datetime]:
-        """Parse date string from Google News format"""
-        try:
-            # Google News date formats
+            # Try standard RSS date formats
             date_formats = [
+                "%a, %d %b %Y %H:%M:%S %Z",
+                "%a, %d %b %Y %H:%M:%S %z",
                 "%Y-%m-%dT%H:%M:%SZ",
                 "%Y-%m-%dT%H:%M:%S.%fZ",
-                "%a, %d %b %Y %H:%M:%S %Z",
-                "%d %b %Y",
-                "%B %d, %Y"
+                "%Y-%m-%d %H:%M:%S",
+                "%d %b %Y %H:%M:%S",
+                "%B %d, %Y",
+                "%d %b %Y"
             ]
             
             for fmt in date_formats:
@@ -94,38 +56,21 @@ class GoogleNewsScraper:
                 except ValueError:
                     continue
             
-            # Handle relative dates like "2 hours ago", "1 day ago"
-            if 'ago' in date_str.lower():
-                return self._parse_relative_date(date_str)
+            # Try feedparser's date parsing
+            try:
+                # feedparser parses dates automatically in entries, but we can try manual parsing
+                from email.utils import parsedate_tz
+                parsed = parsedate_tz(date_str)
+                if parsed:
+                    # Convert to datetime (simplified)
+                    import time
+                    timestamp = time.mktime(parsed[:9])
+                    return datetime.fromtimestamp(timestamp)
+            except Exception:
+                pass
                 
         except Exception as e:
             logger.debug(f"Failed to parse date '{date_str}': {e}")
-        
-        return None
-
-    def _parse_relative_date(self, date_str: str) -> Optional[datetime]:
-        """Parse relative date strings like '2 hours ago'"""
-        try:
-            now = datetime.now()
-            date_str = date_str.lower().strip()
-            
-            if 'minute' in date_str:
-                minutes = int(re.search(r'(\d+)', date_str).group(1))
-                return now - timedelta(minutes=minutes)
-            elif 'hour' in date_str:
-                hours = int(re.search(r'(\d+)', date_str).group(1))
-                return now - timedelta(hours=hours)
-            elif 'day' in date_str:
-                days = int(re.search(r'(\d+)', date_str).group(1))
-                return now - timedelta(days=days)
-            elif 'week' in date_str:
-                weeks = int(re.search(r'(\d+)', date_str).group(1))
-                return now - timedelta(weeks=weeks)
-            elif 'month' in date_str:
-                months = int(re.search(r'(\d+)', date_str).group(1))
-                return now - timedelta(days=months * 30)
-        except:
-            pass
         
         return None
 
@@ -141,58 +86,138 @@ class GoogleNewsScraper:
             'banking', 'healthcare', 'government', 'critical infrastructure',
             'supply chain', 'iot', 'industrial control', 'scada',
             'cyber attack', 'data breach', 'security breach', 'hack',
-            'cybersecurity', 'cybercrime', 'threat', 'incident'
+            'cybersecurity', 'cybercrime', 'threat', 'incident', 'hacking',
+            'data leak', 'cyber fraud', 'online fraud', 'security incident',
+            'cyber threat', 'security vulnerability', 'cyber defense'
         ]
 
         for term in important_terms:
             if term in text_lower:
                 keywords.append(term)
 
-        return keywords[:10]
+        return list(set(keywords))[:15]  # Remove duplicates and limit
 
-    def _is_india_related(self, text: str) -> bool:
-        """Check if text content is related to Indian cybersecurity"""
+    def _is_india_related(self, text: str, source_url: str = "") -> bool:
+        """
+        Improved India-related detection - more lenient and intelligent
+        Returns True if content is likely related to Indian cybersecurity
+        """
+        if not text:
+            return False
+            
         text_lower = text.lower()
-
-        indian_indicators = [
-            'india', 'indian', 'delhi', 'mumbai', 'bangalore', 'hyderabad',
-            'chennai', 'pune', 'aadhaar', 'aadhar', 'digital india',
-            'government of india', 'indian government', 'ministry of',
-            'indian companies', 'indian banks', 'indian it', 'infosys',
-            'tcs', 'wipro', 'tech mahindra', 'hcl', 'state bank of india',
-            'icici', 'hdfc', 'paytm', 'phonepe', 'upi', 'indian rupee',
+        url_lower = source_url.lower() if source_url else ""
+        
+        # Strong Indian indicators
+        strong_indian_indicators = [
+            'india', 'indian', 'bharat', 'hindustan',
+            'delhi', 'mumbai', 'bangalore', 'bengaluru', 'hyderabad',
+            'chennai', 'madras', 'pune', 'kolkata', 'calcutta',
+            'ahmedabad', 'surat', 'jaipur', 'lucknow', 'kanpur',
+            'nagpur', 'indore', 'thane', 'bhopal', 'visakhapatnam',
+            'patna', 'vadodara', 'ghaziabad', 'ludhiana', 'agra',
+            'aadhaar', 'aadhar', 'digital india', 'make in india',
+            'government of india', 'indian government', 'goi',
+            'ministry of', 'pm modi', 'prime minister',
             'cert-in', 'indian computer emergency response team',
-            'indian cyber', 'india cyber', 'cyber india'
+            'meity', 'ministry of electronics', 'nitiaayog',
+            'rbi', 'reserve bank of india', 'sebi', 'irdai'
         ]
-
+        
+        # Indian companies and organizations
+        indian_entities = [
+            'infosys', 'tcs', 'tata consultancy', 'wipro', 'tech mahindra',
+            'hcl', 'cognizant india', 'accenture india', 'capgemini india',
+            'state bank of india', 'sbi', 'icici', 'hdfc', 'axis bank',
+            'kotak mahindra', 'pnb', 'bank of baroda', 'canara bank',
+            'paytm', 'phonepe', 'google pay india', 'amazon pay india',
+            'flipkart', 'amazon india', 'reliance', 'jio', 'airtel',
+            'vodafone idea', 'bsnl', 'mtnl', 'tata communications',
+            'indian railways', 'air india', 'indigo', 'spicejet'
+        ]
+        
+        # Indian states and regions
+        indian_states = [
+            'andhra pradesh', 'arunachal pradesh', 'assam', 'bihar',
+            'chhattisgarh', 'goa', 'gujarat', 'haryana', 'himachal pradesh',
+            'jharkhand', 'karnataka', 'kerala', 'madhya pradesh',
+            'maharashtra', 'manipur', 'meghalaya', 'mizoram', 'nagaland',
+            'odisha', 'punjab', 'rajasthan', 'sikkim', 'tamil nadu',
+            'telangana', 'tripura', 'uttar pradesh', 'uttarakhand',
+            'west bengal', 'delhi ncr', 'ncr', 'noida', 'gurgaon'
+        ]
+        
+        # Cyber security keywords (broader list)
         cyber_keywords = [
             'cyber attack', 'data breach', 'ransomware', 'phishing',
             'malware', 'hacking', 'cybersecurity', 'security breach',
-            'data leak', 'cyber crime', 'vulnerability', 'exploit'
+            'data leak', 'cyber crime', 'cybercrime', 'vulnerability',
+            'exploit', 'hack', 'hacked', 'breach', 'leak', 'compromised',
+            'cyber threat', 'security incident', 'cyber fraud',
+            'online fraud', 'digital fraud', 'cyber security',
+            'information security', 'network security', 'data security',
+            'cyber defense', 'cyber intelligence', 'threat intelligence'
         ]
-
-        india_score = sum(1 for indicator in indian_indicators if indicator in text_lower)
+        
+        # Check URL for Indian domains
+        indian_domains = [
+            '.in', '.co.in', '.gov.in', '.ac.in', '.edu.in',
+            'timesofindia', 'thehindu', 'indianexpress', 'hindustantimes',
+            'ndtv', 'news18', 'firstpost', 'moneycontrol', 'livemint',
+            'economictimes', 'business-standard', 'techcrunch india'
+        ]
+        
+        url_score = sum(1 for domain in indian_domains if domain in url_lower)
+        
+        # Count indicators
+        india_score = sum(1 for indicator in strong_indian_indicators if indicator in text_lower)
+        india_score += sum(1 for entity in indian_entities if entity in text_lower)
+        india_score += sum(1 for state in indian_states if state in text_lower)
         cyber_score = sum(1 for keyword in cyber_keywords if keyword in text_lower)
-        return india_score > 0 and cyber_score > 0
+        
+        # More lenient detection:
+        # 1. If URL is from Indian domain, require only cyber keyword
+        # 2. If strong India indicator found, require only cyber keyword
+        # 3. Otherwise, require both India and cyber indicators
+        
+        if url_score > 0 and cyber_score > 0:
+            return True
+        
+        if india_score >= 2 and cyber_score > 0:
+            return True
+            
+        if india_score > 0 and cyber_score >= 2:
+            return True
+        
+        # For RSS feeds from Indian sources, be more lenient
+        if any(domain in url_lower for domain in ['.in', 'indian', 'india']):
+            if cyber_score > 0 or any(keyword in text_lower for keyword in ['security', 'cyber', 'hack', 'breach', 'attack']):
+                return True
+        
+        return False
 
     def _classify_severity(self, title: str, content: str) -> str:
         """Classify incident severity based on content"""
         text = f"{title} {content}".lower()
         
         critical_indicators = [
-            'critical', 'zero-day', 'remote code execution', 'privilege escalation',
-            'system compromise', 'data breach', 'ransomware', 'apt',
-            'nation-state', 'government', 'infrastructure'
+            'critical', 'zero-day', 'remote code execution', 'rce',
+            'privilege escalation', 'system compromise', 'nation-state',
+            'apt', 'advanced persistent threat', 'state-sponsored',
+            'critical infrastructure', 'power grid', 'financial system',
+            'government breach', 'massive breach', 'millions affected'
         ]
         
         high_indicators = [
-            'high', 'severe', 'vulnerability', 'exploit', 'malware',
-            'phishing', 'ddos', 'attack', 'breach'
+            'high', 'severe', 'serious', 'major', 'significant',
+            'vulnerability', 'exploit', 'malware', 'ransomware',
+            'phishing', 'ddos', 'attack', 'breach', 'data breach',
+            'hacked', 'compromised', 'leaked'
         ]
         
         medium_indicators = [
             'medium', 'moderate', 'security', 'advisory', 'update',
-            'patch', 'fix', 'warning'
+            'patch', 'fix', 'warning', 'alert', 'incident'
         ]
         
         if any(indicator in text for indicator in critical_indicators):
@@ -208,186 +233,180 @@ class GoogleNewsScraper:
         """Classify incident category"""
         text = f"{title} {content}".lower()
         
-        if 'vulnerability' in text or 'cve' in text:
-            return 'Vulnerability'
-        elif 'malware' in text or 'ransomware' in text:
-            return 'Malware'
-        elif 'phishing' in text:
-            return 'Phishing'
-        elif 'ddos' in text:
-            return 'DDoS'
-        elif 'apt' in text or 'advanced persistent threat' in text:
-            return 'APT'
-        elif 'data breach' in text or 'breach' in text:
-            return 'Data Breach'
-        elif 'hack' in text or 'hacking' in text:
-            return 'Hacking'
-        else:
-            return 'General Security'
+        category_keywords = {
+            'Data Breach': ['data breach', 'data leak', 'personal data', 'customer data', 'user data exposed'],
+            'Ransomware': ['ransomware', 'ransom', 'locked', 'encrypted files'],
+            'Phishing': ['phishing', 'phishing attack', 'email scam', 'fraudulent email'],
+            'Malware': ['malware', 'virus', 'trojan', 'spyware', 'adware', 'botnet'],
+            'DDoS Attack': ['ddos', 'distributed denial', 'service attack', 'server down'],
+            'Vulnerability': ['vulnerability', 'cve-', 'security flaw', 'bug', 'exploit'],
+            'APT Campaign': ['apt', 'advanced persistent threat', 'nation-state', 'state-sponsored'],
+            'Supply Chain Attack': ['supply chain', 'third-party', 'vendor breach'],
+            'Insider Threat': ['insider', 'employee', 'internal threat'],
+            'Social Engineering': ['social engineering', 'scam', 'fraud', 'impersonation']
+        }
+        
+        for category, keywords in category_keywords.items():
+            if any(keyword in text for keyword in keywords):
+                return category
+        
+        return 'Other'
 
     def _classify_affected_sector(self, title: str, content: str) -> str:
         """Classify affected sector"""
         text = f"{title} {content}".lower()
         
-        if any(term in text for term in ['bank', 'financial', 'fintech', 'payment']):
-            return 'Banking/Financial'
-        elif any(term in text for term in ['government', 'ministry', 'department', 'public']):
-            return 'Government/Public'
-        elif any(term in text for term in ['healthcare', 'hospital', 'medical']):
-            return 'Healthcare'
-        elif any(term in text for term in ['education', 'university', 'school']):
-            return 'Education'
-        elif any(term in text for term in ['energy', 'power', 'utility']):
-            return 'Energy/Utilities'
-        elif any(term in text for term in ['telecom', 'communication']):
-            return 'Telecommunications'
-        else:
-            return 'General'
+        sector_keywords = {
+            'Banking & Finance': ['bank', 'financial', 'fintech', 'payment', 'upi', 'wallet', 'rbi', 'banking'],
+            'Government': ['government', 'ministry', 'department', 'public sector', 'govt', 'goi'],
+            'Healthcare': ['healthcare', 'hospital', 'medical', 'health', 'patient data'],
+            'Education': ['education', 'university', 'school', 'college', 'student'],
+            'IT & Software': ['it company', 'software', 'tech company', 'it services', 'outsourcing'],
+            'Telecommunications': ['telecom', 'communication', 'mobile', 'network', '5g', '4g'],
+            'Energy': ['energy', 'power', 'utility', 'electricity', 'grid'],
+            'Transportation': ['transport', 'railways', 'airlines', 'aviation', 'logistics'],
+            'E-commerce': ['e-commerce', 'online shopping', 'ecommerce', 'retail online'],
+            'Manufacturing': ['manufacturing', 'factory', 'industrial', 'production']
+        }
+        
+        for sector, keywords in sector_keywords.items():
+            if any(keyword in text for keyword in keywords):
+                return sector
+        
+        return 'Other'
 
-    def scrape_google_news_search(self, query: str, max_results: int = 50) -> List[Dict[str, Any]]:
-        """Scrape Google News search results for a specific query"""
+    def scrape_google_news_rss(self, query: str, max_results: int = 50, source_id: int = None) -> List[Dict[str, Any]]:
+        """
+        Scrape Google News RSS feed for a specific query
+        This is more reliable than HTML scraping
+        """
         articles = []
         
         try:
-            # Construct Google News search URL
-            search_url = f"https://news.google.com/search?q={quote(query)}&hl=en-IN&gl=IN&ceid=IN:en"
-            logger.info(f"Scraping Google News for query: {query}")
+            # Construct Google News RSS URL
+            encoded_query = quote_plus(query.strip())
+            rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-IN&gl=IN&ceid=IN:en&num={max_results}"
             
-            response = self._make_request(search_url)
-            if not response:
+            logger.info(f"Scraping Google News RSS for query: {query}")
+            
+            # Parse RSS feed
+            feed = feedparser.parse(rss_url)
+            
+            if feed.bozo and feed.bozo_exception:
+                logger.warning(f"RSS feed parse warning: {feed.bozo_exception}")
+            
+            if not feed.entries:
+                logger.warning(f"No entries found in RSS feed for query: {query}")
                 return articles
-
-            soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Find article links in Google News results
-            article_links = soup.find_all('a', {'data-n-tid': True})
-            
-            for link in article_links[:max_results]:
+            for entry in feed.entries[:max_results]:
                 try:
-                    # Extract article URL (Google News uses encoded URLs)
-                    article_url = link.get('href')
-                    if not article_url or article_url.startswith('#'):
+                    # Parse publication date
+                    pub_date = None
+                    if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                        pub_date = datetime(*entry.published_parsed[:6])
+                    elif hasattr(entry, 'published'):
+                        pub_date = self._parse_rss_date(entry.published)
+                    elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                        pub_date = datetime(*entry.updated_parsed[:6])
+                    
+                    # Skip very old articles (older than 60 days for better coverage)
+                    if pub_date and (datetime.now() - pub_date).days > 60:
                         continue
                     
-                    # Make absolute URL
-                    if article_url.startswith('/'):
-                        article_url = urljoin(self.base_url, article_url)
-                    
-                    # Extract title
-                    title_elem = link.find('h3') or link.find('h4')
-                    if not title_elem:
-                        continue
-                    
-                    title = title_elem.get_text(strip=True)
+                    # Extract content
+                    title = entry.get('title', '').strip()
                     if not title or len(title) < 10:
                         continue
                     
-                    # Try to extract date from nearby elements
-                    date_text = ""
-                    parent = link.parent
-                    if parent:
-                        time_elem = parent.find('time')
-                        if time_elem:
-                            date_text = time_elem.get('datetime') or time_elem.get_text(strip=True)
+                    # Get description/summary
+                    description = ""
+                    if hasattr(entry, 'summary'):
+                        description = entry.summary
+                    elif hasattr(entry, 'description'):
+                        description = entry.description
+                    elif hasattr(entry, 'content') and entry.content:
+                        description = entry.content[0].get('value', '') if isinstance(entry.content, list) else str(entry.content)
                     
-                    # Parse date
-                    incident_date = self._parse_google_news_date(date_text)
+                    # Clean HTML from description
+                    if description:
+                        # Remove HTML tags
+                        description = re.sub(r'<[^>]+>', '', description)
+                        description = description.strip()
                     
-                    # Skip very old articles (older than 30 days)
-                    if incident_date and (datetime.now() - incident_date).days > 30:
+                    # Get link
+                    link = entry.get('link', '')
+                    if not link:
                         continue
                     
-                    # Fetch full content
-                    content = self._fetch_article_content(article_url)
+                    # Combine text for analysis
+                    full_text = f"{title} {description}".strip()
                     
-                    if content:
-                        # Check if India-related
-                        full_text = f"{title} {content}"
-                        if not self._is_india_related(full_text):
-                            continue
-                        
-                        keywords = self._extract_keywords(full_text)
-                        severity = self._classify_severity(title, content)
-                        category = self._classify_category(title, content)
-                        affected_sector = self._classify_affected_sector(title, content)
-                        
-                        article = {
-                            'title': title,
-                            'url': article_url,
-                            'description': content,
-                            'incident_date': incident_date,
-                            'source_id': self._get_google_news_source_id(),
-                            'keywords': keywords,
-                            'summary': content[:500] if content else title,
-                            'india_related': True,
-                            'category': category,
-                            'severity': severity,
-                            'affected_sector': affected_sector,
-                            'apt_group': None,
-                            'attack_vectors': [],
-                            'iocs': []
-                        }
-                        
-                        articles.append(article)
+                    # Check if India-related (more lenient for RSS feeds)
+                    if not self._is_india_related(full_text, link):
+                        continue
                     
-                    time.sleep(REQUEST_DELAY)
+                    # Extract keywords
+                    keywords = self._extract_keywords(full_text)
+                    
+                    # Classify
+                    severity = self._classify_severity(title, description)
+                    category = self._classify_category(title, description)
+                    affected_sector = self._classify_affected_sector(title, description)
+                    
+                    # Create article dictionary
+                    article = {
+                        'title': title,
+                        'url': link,
+                        'description': description[:2000] if description else title,  # Limit description length
+                        'incident_date': pub_date,
+                        'source_id': source_id,
+                        'keywords': keywords,
+                        'summary': description[:500] if description else title,
+                        'india_related': True,
+                        'category': category,
+                        'severity': severity,
+                        'affected_sector': affected_sector,
+                    }
+                    
+                    articles.append(article)
                     
                 except Exception as e:
-                    logger.error(f"Error processing Google News article: {e}")
+                    logger.error(f"Error processing RSS entry: {e}")
+                    logger.debug(f"Entry data: {entry.get('title', 'No title')}")
                     continue
-
+            
             logger.info(f"Found {len(articles)} India-related articles for query: {query}")
             
         except Exception as e:
-            logger.error(f"Failed to scrape Google News for query '{query}': {e}")
-
+            logger.error(f"Failed to scrape Google News RSS for query '{query}': {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+        
         return articles
 
-    def _fetch_article_content(self, url: str) -> Optional[str]:
-        """Fetch full article content from URL"""
-        try:
-            # Check if domain is allowed
-            parsed_url = urlparse(url)
-            if parsed_url.netloc not in SECURITY_CONFIG.get('allowed_domains', []):
-                # For Google News, we'll allow most domains but be cautious
-                pass
-            
-            response = self._make_request(url)
-            if not response:
-                return None
-
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Try to find main content area
-            content_selectors = [
-                'article', '.article-content', '.post-content',
-                '.entry-content', '.content', 'main', '.main-content',
-                '.story-body', '.article-body', '.post-body'
-            ]
-            
-            for selector in content_selectors:
-                content_elem = soup.select_one(selector)
-                if content_elem:
-                    return self._extract_text_content(str(content_elem))
-            
-            # Fallback to body content
-            if soup.body:
-                return self._extract_text_content(str(soup.body))
-            
-            return None
-            
-        except Exception as e:
-            logger.debug(f"Failed to fetch article content from {url}: {e}")
-            return None
-
-    def _get_google_news_source_id(self) -> int:
+    def _get_google_news_source_id(self) -> Optional[int]:
         """Get Google News source ID from database"""
-        # This should return the actual Google News source ID from database
-        # For now, return a placeholder
-        return 7  # Placeholder Google News source ID
+        try:
+            with db_manager.get_session() as session:
+                source = session.query(Source).filter(
+                    Source.name == "Google News India Cyber"
+                ).first()
+                
+                if source:
+                    return source.id
+                else:
+                    logger.warning("Google News source not found in database")
+                    return None
+        except Exception as e:
+            logger.error(f"Error getting Google News source ID: {e}")
+            return None
 
-    def scrape_cybersecurity_news(self, max_results_per_query: int = 20) -> Dict[str, Any]:
-        """Scrape cybersecurity news from Google News using multiple queries"""
+    def scrape_cybersecurity_news(self, max_results_per_query: int = 30, source_id: int = None) -> Dict[str, Any]:
+        """
+        Scrape cybersecurity news from Google News using multiple queries
+        Improved version with better error handling and deduplication
+        """
         results = {
             'total_articles': 0,
             'india_related': 0,
@@ -396,73 +415,83 @@ class GoogleNewsScraper:
         }
         
         all_articles = []
+        seen_urls = set()  # Global deduplication
+        
+        # Get source ID if not provided
+        if source_id is None:
+            source_id = self._get_google_news_source_id()
         
         try:
-            # Define search queries for Indian cybersecurity news
-            search_queries = [
-                'cybersecurity india',
-                'cyber attack india',
-                'data breach india',
-                'ransomware india',
-                'cyber crime india',
-                'indian cybersecurity',
-                'india cyber security',
-                'cyber threat india',
-                'digital security india',
-                'cyber incident india'
-            ]
+            # Use keywords from config - focus on most relevant ones
+            search_queries = INDIA_CYBER_KEYWORDS[:15]  # Use top 15 keywords
+            
+            logger.info(f"Starting Google News scraping with {len(search_queries)} queries")
             
             for query in search_queries:
                 try:
                     logger.info(f"Processing query: {query}")
-                    articles = self.scrape_google_news_search(query, max_results_per_query)
+                    articles = self.scrape_google_news_rss(query, max_results_per_query, source_id)
                     
-                    # Deduplicate articles by URL
-                    seen_urls = set()
+                    # Deduplicate by URL
                     unique_articles = []
-                    
                     for article in articles:
-                        if article['url'] not in seen_urls:
-                            seen_urls.add(article['url'])
+                        url = article.get('url', '')
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
                             unique_articles.append(article)
                     
                     all_articles.extend(unique_articles)
                     results['queries_processed'] += 1
                     
-                    logger.info(f"Query '{query}': {len(unique_articles)} unique articles")
+                    logger.info(f"Query '{query}': {len(unique_articles)} unique articles (total: {len(all_articles)})")
                     
-                    # Delay between queries
+                    # Delay between queries to avoid rate limiting
                     time.sleep(REQUEST_DELAY * 2)
                     
                 except Exception as e:
                     error_msg = f"Error processing query '{query}': {str(e)}"
                     results['errors'].append(error_msg)
                     logger.error(error_msg)
+                    import traceback
+                    logger.debug(traceback.format_exc())
+                    continue
             
             # Save articles to database
             saved_count = 0
-            for article in all_articles:
-                if db_manager.add_incident(article):
-                    saved_count += 1
-            
-            # Log activity
-            db_manager.log_scraping_activity(
-                source_id=self._get_google_news_source_id(),
-                status='success',
-                items_found=len(all_articles),
-                items_processed=saved_count,
-                processing_time=0  # Will be calculated by the calling function
-            )
+            if all_articles:
+                logger.info(f"Saving {len(all_articles)} articles to database...")
+                for article in all_articles:
+                    try:
+                        if db_manager.add_incident(article):
+                            saved_count += 1
+                    except Exception as e:
+                        logger.error(f"Error saving article '{article.get('title', 'Unknown')}': {e}")
+                        continue
+                
+                # Log activity
+                if source_id:
+                    try:
+                        db_manager.log_scraping_activity(
+                            source_id=source_id,
+                            status='success',
+                            items_found=len(all_articles),
+                            items_processed=saved_count,
+                            processing_time=0
+                        )
+                    except Exception as e:
+                        logger.error(f"Error logging scraping activity: {e}")
             
             results['total_articles'] = len(all_articles)
             results['india_related'] = len([a for a in all_articles if a.get('india_related')])
             
-            logger.info(f"Google News scraping completed: {len(all_articles)} articles, {saved_count} saved")
+            logger.info(f"Google News scraping completed: {len(all_articles)} articles found, {saved_count} saved")
             
         except Exception as e:
             error_msg = f"Google News scraping error: {str(e)}"
             results['errors'].append(error_msg)
             logger.error(error_msg)
+            import traceback
+            logger.debug(traceback.format_exc())
         
         return results
 

@@ -140,6 +140,36 @@ class DatabaseManager:
                     source_type="blog",
                     rss_url="https://cyberops.in/blog/feed"
                 ),
+                Source(
+                    name="Livemint Technology",
+                    url="https://www.livemint.com",
+                    source_type="news",
+                    rss_url="https://www.livemint.com/rss/technology"
+                ),
+                Source(
+                    name="The Hindu Technology",
+                    url="https://www.thehindu.com",
+                    source_type="news",
+                    rss_url="https://www.thehindu.com/news/national/feeder/default.rss"
+                ),
+                Source(
+                    name="Indian Express Technology",
+                    url="https://indianexpress.com",
+                    source_type="news",
+                    rss_url="https://indianexpress.com/section/technology/feed/"
+                ),
+                Source(
+                    name="Times of India Technology",
+                    url="https://timesofindia.indiatimes.com",
+                    source_type="news",
+                    rss_url="https://timesofindia.indiatimes.com/rssfeeds/5880659.cms"
+                ),
+                Source(
+                    name="Business Standard Technology",
+                    url="https://www.business-standard.com",
+                    source_type="news",
+                    rss_url="https://www.business-standard.com/rss/technology-106.rss"
+                ),
             ]
             
             # Check if sources already exist and add missing ones

@@ -19,14 +19,33 @@ REQUEST_TIMEOUT = 30  # seconds
 REQUEST_DELAY = 2  # seconds between requests
 MAX_RETRIES = 3
 
-# India-specific cyber incident keywords
+# India-specific cyber incident keywords (expanded)
 INDIA_CYBER_KEYWORDS = [
+    # Basic cybersecurity + India
     "cyber attack india", "data breach india", "ransomware india",
     "phishing india", "malware india", "cybersecurity india",
     "indian cyber", "india hacked", "digital india security",
     "indian government cyber", "indian banks cyber", "indian it sector cyber",
     "cyber crime india", "india cybersecurity", "indian companies hacked",
-    "digital payments india breach", "aadhaar breach", "india data leak"
+    "digital payments india breach", "aadhaar breach", "india data leak",
+    # Additional keywords for better coverage
+    "india cyber threat", "indian cyber security", "cyber security india",
+    "india ransomware attack", "india data breach", "indian cyber attack",
+    "cyber fraud india", "online fraud india", "india cybercrime",
+    "indian cybersecurity news", "india security breach", "indian it security",
+    "india cyber incident", "indian cyber threat", "cyber attack on india",
+    "india hacking", "indian hackers", "india cyber attack news",
+    "cert-in india", "indian cert", "india cyber alert",
+    "indian government hacked", "india bank hacked", "indian company hacked",
+    "upi fraud india", "digital india hack", "india cyber defense",
+    "indian cybersecurity companies", "india cyber law", "indian cyber policy",
+    # Sector-specific
+    "india banking cyber attack", "indian bank cyber security",
+    "india healthcare cyber", "indian government cyber security",
+    "india telecom cyber", "indian energy cyber attack",
+    # Regional
+    "delhi cyber crime", "mumbai cyber attack", "bangalore cybersecurity",
+    "hyderabad cyber security", "chennai cyber crime"
 ]
 
 # News Sources Configuration
@@ -65,6 +84,36 @@ NEWS_SOURCES = {
         "base_url": "https://cyberops.in",
         "rss_url": "https://cyberops.in/blog/feed",
         "enabled": True
+    },
+    "techcrunch_india": {
+        "base_url": "https://techcrunch.com",
+        "rss_url": "https://techcrunch.com/tag/india/feed/",
+        "enabled": True
+    },
+    "livemint_cyber": {
+        "base_url": "https://www.livemint.com",
+        "rss_url": "https://www.livemint.com/rss/technology",
+        "enabled": True
+    },
+    "the_hindu_tech": {
+        "base_url": "https://www.thehindu.com",
+        "rss_url": "https://www.thehindu.com/news/national/feeder/default.rss",
+        "enabled": True
+    },
+    "indian_express_tech": {
+        "base_url": "https://indianexpress.com",
+        "rss_url": "https://indianexpress.com/section/technology/feed/",
+        "enabled": True
+    },
+    "times_of_india_tech": {
+        "base_url": "https://timesofindia.indiatimes.com",
+        "rss_url": "https://timesofindia.indiatimes.com/rssfeeds/5880659.cms",
+        "enabled": True
+    },
+    "business_standard_tech": {
+        "base_url": "https://www.business-standard.com",
+        "rss_url": "https://www.business-standard.com/rss/technology-106.rss",
+        "enabled": True
     }
 }
 
@@ -79,7 +128,7 @@ REDDIT_CONFIG = {
 ML_CONFIG = {
     "model_path": "ml_model/incident_classifier.pkl",
     "vectorizer_path": "ml_model/tfidf_vectorizer.pkl",
-    "min_confidence": 0.6,  # Minimum confidence score for relevance
+    "min_confidence": 0.5,  # Minimum confidence score for relevance
     "retrain_threshold": 1000,  # Retrain after this many new samples
 }
 
@@ -146,7 +195,11 @@ SECURITY_CONFIG = {
         "thehackernews.com", "bleepingcomputer.com", "securityaffairs.co",
         "krebsonsecurity.com", "darkreading.com", "cyberscoop.com",
         "techcrunch.com", "zdnet.com", "reuters.com", "news.google.com",
-        "ciso.economictimes.indiatimes.com", "cyraacs.com", "cyberops.in"
+        "ciso.economictimes.indiatimes.com", "cyraacs.com", "cyberops.in",
+        "livemint.com", "thehindu.com", "indianexpress.com",
+        "timesofindia.indiatimes.com", "business-standard.com",
+        "economictimes.indiatimes.com", "mint.com", "ndtv.com",
+        "news18.com", "firstpost.com", "moneycontrol.com"
     ],
     "sanitize_html": True,
     "respect_robots_txt": True
